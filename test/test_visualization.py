@@ -8,7 +8,7 @@ import pandas as pd
 # Add the parent directory to Python's search path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Correctly import from 'visualization' (change if your file is named differently)
+# Correctly import from 'visualization'
 from visualization import estimate_and_plot_each_patient
 
 
@@ -51,14 +51,27 @@ class TestHBMVisualizationPipeline(unittest.TestCase):
         mock_trace.posterior.__getitem__.return_value.mean.return_value.values = np.array([1000.0, 1100.0])
         mock_pm_sample.return_value = mock_trace
 
-        # 2. Mock ArviZ az.summary() to return a DataFrame containing expected parameter summary stats
-        index_labels = [
+        # 2. Mock ArviZ az.summary() for both calls:
+        # Call 1: Population hyper-priors summary table
+        pop_summary_mock = pd.DataFrame({
+            "mean": [-4.5, -3.0, 11.5, 0.25],
+            "sd": [0.5, 0.5, 0.2, 0.05],
+            "hdi_3%": [-5.5, -4.0, 11.0, 0.15],
+            "hdi_97%": [-3.5, -2.0, 12.0, 0.35]
+        }, index=["mu_log_rho", "mu_log_D", "mu_log_K", "sigma_obs_log_v"])
+
+        # Call 2: Patient-level posterior summary table
+        post_summary_mock = pd.DataFrame({
+            "mean": [0.01, 0.005, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+        }, index=[
             "rho[0]", "D[0]", 
             "alpha_chemo[0]", "alpha_rad[0]", 
             "alpha_immuno[0]", "alpha_add1[0]", 
             "alpha_add2[0]", "alpha_brachy[0]"
-        ]
-        mock_az_summary.return_value = pd.DataFrame({"mean": [0.01, 0.005, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]}, index=index_labels)
+        ])
+
+        # Use side_effect to return pop_summary on first call and post_summary on second call
+        mock_az_summary.side_effect = [pop_summary_mock, post_summary_mock]
 
         # 3. Execute function
         result_df = estimate_and_plot_each_patient(
@@ -79,9 +92,9 @@ class TestHBMVisualizationPipeline(unittest.TestCase):
         self.assertEqual(result_df.iloc[0]["rho"], 0.01)
         self.assertEqual(result_df.iloc[0]["D"], 0.005)
 
-        # Verify that MCMC sampling and plotting routines were triggered
+        # Verify that MCMC sampling, ArviZ summaries, and plotting routines were triggered
         mock_pm_sample.assert_called_once()
-        mock_az_summary.assert_called_once()
+        self.assertEqual(mock_az_summary.call_count, 2)
         mock_plt_show.assert_called_once()
 
     @patch("visualization.build_patient_volume_dataframe")

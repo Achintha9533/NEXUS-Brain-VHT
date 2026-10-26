@@ -15,9 +15,10 @@ import pandas as pd
 import pymc as pm
 import arviz as az
 
-# Import model builder and data prep modules from your repository
+# Import model builder, data prep modules, and helper configurations from repository
 from vht_pipeline import build_patient_volume_dataframe
 from hbm_Fisher_kpp import build_hierarchical_fisher_kpp_model
+from vht_helper_functions import keys_to_check
 
 
 def estimate_and_plot_each_patient(
@@ -42,6 +43,25 @@ def estimate_and_plot_each_patient(
     with hbm_model:
         trace = pm.sample(draws=draw_steps, tune=tune_steps, target_accept=0.90, random_seed=42)
     
+    # --- ENHANCED STATISTICAL SUMMARY REPORTING ---
+    print("\n" + "="*75)
+    print("      HIERARCHICAL BAYESIAN MODEL (HBM) POPULATION HYPER-PRIORS      ")
+    print("      (Posterior Mean & 94% HPD Confidence Intervals)               ")
+    print("="*75)
+    
+    pop_summary = az.summary(trace, var_names=["mu_log_rho", "mu_log_D", "mu_log_K", "sigma_obs_log_v"], kind="stats")
+    
+    print(f"{'Parameter':<20} | {'Mean':<10} | {'SD':<10} | {'HPD 3%':<10} | {'HPD 97%':<10}")
+    print("-" * 65)
+    
+    for param_name, row in pop_summary.iterrows():
+        mean_val = row.get("mean", 0.0)
+        sd_val = row.get("sd", 0.0)
+        hdi_3 = row.get("hdi_3%", row.get("hdi_5.5%", 0.0))
+        hdi_97 = row.get("hdi_97%", row.get("hdi_94.5%", 0.0))
+        print(f"{param_name:<20} | {mean_val:<10.4f} | {sd_val:<10.4f} | {hdi_3:<10.4f} | {hdi_97:<10.4f}")
+    print("="*75 + "\n")
+
     # Extract mean structural configurations across the tracking posterior context
     post_summary = az.summary(trace, kind="stats")
     
@@ -55,20 +75,12 @@ def estimate_and_plot_each_patient(
         "Immuno": "tab:cyan", "Brachy": "tab:olive"
     }
 
-    keys_to_check = [
-        ("Chemo", "Number of days from Diagnosis to Initial Chemo Therapy Start date", "Number of days from Diagnosis to Initial Chemo Therapy end date"),
-        ("Rad", "Number of days from Diagnosis to Radiation Therapy Start date", "Number of days from Diagnosis to Radiation Therapy end date"),
-        ("Additional1", "Number of Days from Diagnosis to Starting Additional Therapy", "Number of Days from Diagnosis to Complete Additional Therapy"),
-        ("Additional2", "Number of Days from Diagnosis to Starting 2nd_Additional Therapy", "Number of Days from Diagnosis to Complete 2nd_Additional Therapy"),
-        ("Immuno", "Number of Days from Diagnosis to Start Immunotherapy", "Number of Days from Diagnosis to Complete Immunotherapy"),
-        ("Brachy", "Number of Days from Diagnosis to the day of Insertion of Brachytherapy", "Number of Days from Diagnosis to the day of Insertion of Brachytherapy")
-    ]
-
     results = []
 
     for p_idx, (pid, g) in enumerate(df.groupby("Patient_ID")):
         g = g.sort_values("Day").reset_index(drop=True)
-        row_indices = g.index.values + (df[df["Patient_ID"] == pid].index[0])
+        # Robustly extract the exact global row indices corresponding to this patient in df
+        row_indices = df[df["Patient_ID"] == pid].index.values
         
         # Pull specific parameter point statistics out of the unified tracking summary
         rho_mean = float(post_summary.loc[f"rho[{p_idx}]", "mean"])
@@ -106,7 +118,7 @@ def estimate_and_plot_each_patient(
 
         # --- PLOTTING GENERATION ---
         fig, ax = plt.subplots(figsize=(9, 5))
-        obj = patient_objects[pid]
+        obj = patient_objects.get(pid, {})
         clinical = obj.get("clinical", {}) if isinstance(obj, dict) else {}
         max_day_present = g["Day"].max()
         
@@ -120,15 +132,16 @@ def estimate_and_plot_each_patient(
                 end_day = float(e_val) if pd.notna(e_val) else max_day_present
                 if end_day <= start_day:
                     end_day = start_day + 2.0 
-                ax.axvspan(start_day, end_day, color=burn_colors[name], alpha=0.15, label=f"Active Window: {name}")
+                ax.axvspan(start_day, end_day, color=burn_colors.get(name, "gray"), alpha=0.15, label=f"Active Window: {name}")
 
         # 2. Plot Observation points
         ax.plot(g["Day"], g["Volume_Total"], marker="o", linewidth=2, color="black", label="Total volume")
-        if g["Volume_Core"].notna().any():
+        if "Volume_Core" in g.columns and g["Volume_Core"].notna().any():
             ax.plot(g["Day"], g["Volume_Core"], marker="s", linewidth=2, color="tab:blue", label="Core volume")
 
         # 3. Plot Differentiable Tensor Model Fit Trajectory
-        ax.plot(g["Day"], mean_predictions[row_indices], "-", color="tab:red", linewidth=2.5, label="HBM Posterior Mean Trajectory")
+        if len(row_indices) == len(g):
+            ax.plot(g["Day"], mean_predictions[row_indices], "-", color="tab:red", linewidth=2.5, label="HBM Posterior Mean Trajectory")
 
         ax.set_title(f"Patient {pid} | HBM Profile | rho={rho_mean:.4g} | D={D_mean:.4g}")
         ax.set_xlabel("Day")

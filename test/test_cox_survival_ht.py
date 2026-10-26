@@ -32,8 +32,6 @@ import pandas as pd
 import pytest
 
 # Add the project root (NEXUS Brain VHT/) to Python's module search path.
-# This is required because the test file is inside test/, while
-# cox_survival_ht.py is in the parent directory.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 if str(PROJECT_ROOT) not in sys.path:
@@ -177,7 +175,7 @@ def kinetic_patient(synthetic_patient):
     """
     patient_objects = synthetic_patient
 
-    df_kinetics = dpo.build_kinetic_features(patient_objects)
+    df_kinetics = dpo.vht_pipeline.build_kinetic_features(patient_objects)
 
     return patient_objects, df_kinetics
 
@@ -429,7 +427,7 @@ def test_kinetic_features_are_attached_to_patient_object(kinetic_patient):
 def test_build_patient_volume_dataframe_returns_dataframe(kinetic_patient):
     patient_objects, _ = kinetic_patient
 
-    df_volumes = dpo.build_patient_volume_dataframe(patient_objects)
+    df_volumes = dpo.vht_pipeline.build_patient_volume_dataframe(patient_objects)
 
     assert isinstance(df_volumes, pd.DataFrame)
     assert not df_volumes.empty
@@ -439,7 +437,7 @@ def test_build_patient_volume_dataframe_returns_dataframe(kinetic_patient):
 def test_volume_dataframe_has_required_columns(kinetic_patient):
     patient_objects, _ = kinetic_patient
 
-    df_volumes = dpo.build_patient_volume_dataframe(patient_objects)
+    df_volumes = dpo.vht_pipeline.build_patient_volume_dataframe(patient_objects)
 
     required_columns = {
         "Patient_ID",
@@ -475,7 +473,7 @@ def test_volume_dataframe_has_required_columns(kinetic_patient):
 def test_volume_dataframe_days_and_dt(kinetic_patient):
     patient_objects, _ = kinetic_patient
 
-    df_volumes = dpo.build_patient_volume_dataframe(patient_objects)
+    df_volumes = dpo.vht_pipeline.build_patient_volume_dataframe(patient_objects)
 
     assert df_volumes["Day"].tolist() == [10.0, 40.0, 100.0]
 
@@ -488,7 +486,7 @@ def test_volume_dataframe_days_and_dt(kinetic_patient):
 def test_volume_total_and_core(kinetic_patient):
     patient_objects, _ = kinetic_patient
 
-    df_volumes = dpo.build_patient_volume_dataframe(patient_objects)
+    df_volumes = dpo.vht_pipeline.build_patient_volume_dataframe(patient_objects)
 
     assert np.allclose(
         df_volumes["Volume_Total"].to_numpy(),
@@ -504,7 +502,7 @@ def test_volume_total_and_core(kinetic_patient):
 def test_vmax_reference(kinetic_patient):
     patient_objects, _ = kinetic_patient
 
-    df_volumes = dpo.build_patient_volume_dataframe(patient_objects)
+    df_volumes = dpo.vht_pipeline.build_patient_volume_dataframe(patient_objects)
 
     # Maximum Volume_Total = 720
     # Vmax_Ref = 720 * 1.25 = 900
@@ -517,7 +515,7 @@ def test_vmax_reference(kinetic_patient):
 def test_baseline_flag(kinetic_patient):
     patient_objects, _ = kinetic_patient
 
-    df_volumes = dpo.build_patient_volume_dataframe(patient_objects)
+    df_volumes = dpo.vht_pipeline.build_patient_volume_dataframe(patient_objects)
 
     assert df_volumes["Is_Baseline"].tolist() == [1, 0, 0]
 
@@ -525,7 +523,7 @@ def test_baseline_flag(kinetic_patient):
 def test_treatment_exposure_fractions(kinetic_patient):
     patient_objects, _ = kinetic_patient
 
-    df_volumes = dpo.build_patient_volume_dataframe(patient_objects)
+    df_volumes = dpo.vht_pipeline.build_patient_volume_dataframe(patient_objects)
 
     # Chemo interval: day 10 to 40.
     assert np.allclose(
@@ -559,7 +557,7 @@ def test_treatment_exposure_fractions(kinetic_patient):
 def test_treatment_fractions_are_between_zero_and_one(kinetic_patient):
     patient_objects, _ = kinetic_patient
 
-    df_volumes = dpo.build_patient_volume_dataframe(patient_objects)
+    df_volumes = dpo.vht_pipeline.build_patient_volume_dataframe(patient_objects)
 
     treatment_columns = [
         "Chemo_Active",
@@ -577,7 +575,7 @@ def test_treatment_fractions_are_between_zero_and_one(kinetic_patient):
 def test_patient_index_is_contiguous(kinetic_patient):
     patient_objects, _ = kinetic_patient
 
-    df_volumes = dpo.build_patient_volume_dataframe(patient_objects)
+    df_volumes = dpo.vht_pipeline.build_patient_volume_dataframe(patient_objects)
 
     assert df_volumes["Patient_Idx"].unique().tolist() == [0]
 
@@ -588,7 +586,7 @@ def test_patient_index_is_contiguous(kinetic_patient):
 
 def test_build_survival_dataset(kinetic_patient):
     patient_objects, df_kinetics = kinetic_patient
-    df_volumes = dpo.build_patient_volume_dataframe(patient_objects)
+    df_volumes = dpo.vht_pipeline.build_patient_volume_dataframe(patient_objects)
 
     df_survival = dpo.build_survival_dataset(patient_objects, df_volumes, df_kinetics)
 
@@ -603,13 +601,10 @@ def test_build_survival_dataset(kinetic_patient):
 
 def test_run_cox_survival_analysis(kinetic_patient):
     patient_objects, df_kinetics = kinetic_patient
-    df_volumes = dpo.build_patient_volume_dataframe(patient_objects)
+    df_volumes = dpo.vht_pipeline.build_patient_volume_dataframe(patient_objects)
     df_survival = dpo.build_survival_dataset(patient_objects, df_volumes, df_kinetics)
 
-    # With a single synthetic patient, standard Cox models with multiple continuous covariates 
-    # may fail convergence or complain about degrees of freedom, but we can verify execution handling.
     cph_model = dpo.run_cox_survival_analysis(df_survival)
-    # If lifelines is present, ensure it handles single-patient or multi-patient gracefully
     assert cph_model is None or hasattr(cph_model, "print_summary")
 
 
@@ -645,8 +640,8 @@ def test_patient_with_one_timepoint_is_excluded():
         }
     }
 
-    df_kinetics = dpo.build_kinetic_features(patient_objects)
-    df_volumes = dpo.build_patient_volume_dataframe(patient_objects)
+    df_kinetics = dpo.vht_pipeline.build_kinetic_features(patient_objects)
+    df_volumes = dpo.vht_pipeline.build_patient_volume_dataframe(patient_objects)
 
     assert df_kinetics.empty
     assert df_volumes.empty
@@ -655,8 +650,8 @@ def test_patient_with_one_timepoint_is_excluded():
 def test_empty_patient_objects_return_empty_dataframes():
     patient_objects = {}
 
-    df_kinetics = dpo.build_kinetic_features(patient_objects)
-    df_volumes = dpo.build_patient_volume_dataframe(patient_objects)
+    df_kinetics = dpo.vht_pipeline.build_kinetic_features(patient_objects)
+    df_volumes = dpo.vht_pipeline.build_patient_volume_dataframe(patient_objects)
 
     assert isinstance(df_kinetics, pd.DataFrame)
     assert isinstance(df_volumes, pd.DataFrame)
@@ -667,10 +662,6 @@ def test_empty_patient_objects_return_empty_dataframes():
 def test_negative_scan_day_is_detected(kinetic_patient):
     """
     This test documents a known data-quality risk.
-
-    The current pipeline may retain negative Day values if they are
-    present in clinical data. This test intentionally fails if negative
-    days appear, so they can be cleaned before modeling.
     """
     patient_objects, df_kinetics = kinetic_patient
 

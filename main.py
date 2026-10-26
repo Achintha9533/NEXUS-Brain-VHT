@@ -7,6 +7,12 @@ cohort visualization, future predictive forecasting, and output persistence.
 
 from pathlib import Path
 import pandas as pd
+import json
+import datetime
+import pymc
+import numpy as np
+import pandas as pd
+import nibabel as nib
 
 # Import modular components from your repository
 from vht_pipeline import run_pipeline
@@ -19,6 +25,12 @@ def main():
     print("=========================================================")
     print("          NEXUS BRAIN VHT PIPELINE INITIALIZATION        ")
     print("=========================================================")
+
+    # Define hyperparameters for reproducibility tracking
+    MCMC_DRAWS = 50       # Increase to 1000+ for final production runs
+    MCMC_TUNE = 50        # Increase to 1000+ for final production runs
+    TARGET_ACCEPT = 0.90
+    RANDOM_SEED = 42
 
     # 1. Run data ingestion and feature extraction pipeline
     print("\n[Step 1/4] Loading data and building digital patient objects...")
@@ -36,8 +48,8 @@ def main():
     print("\n[Step 2/4] Executing Hierarchical Bayesian Model (HBM) estimation...")
     results_df = estimate_and_plot_each_patient(
         patient_objects=patient_objects, 
-        tune_steps=50,  # Increase to 1000+ for final production runs
-        draw_steps=50   # Increase to 1000+ for final production runs
+        tune_steps=MCMC_TUNE, 
+        draw_steps=MCMC_DRAWS
     )
 
     if results_df.empty:
@@ -52,7 +64,7 @@ def main():
         forecast_days=180
     )
 
-    # 4. Save final estimated parameters, growth forecasts, & volume history to disk
+    # 4. Save final estimated parameters, growth forecasts, volume history & provenance metadata
     output_dir = Path("output")
     output_dir.mkdir(exist_ok=True)
     
@@ -65,11 +77,34 @@ def main():
     
     vol_csv = output_dir / "df_vol.csv"
     df_vol.to_csv(vol_csv, index=False)
+
+    # --- NEW: Build and Save Run Metadata & Provenance JSON ---
+    metadata = {
+        "execution_timestamp": datetime.datetime.now().isoformat(),
+        "cohort_size_patients": int(results_df["Patient_ID"].nunique()),
+        "library_versions": {
+            "pymc": pymc.__version__,
+            "numpy": np.__version__,
+            "pandas": pd.__version__,
+            "nibabel": nib.__version__
+        },
+        "mcmc_hyperparameters": {
+            "draws": MCMC_DRAWS,
+            "tune": MCMC_TUNE,
+            "target_accept": TARGET_ACCEPT,
+            "random_seed": RANDOM_SEED
+        }
+    }
+
+    metadata_json_path = output_dir / "run_metadata.json"
+    with open(metadata_json_path, "w") as f:
+        json.dump(metadata, f, indent=4)
     
     print("\n[Step 4/4] Pipeline execution complete!")
     print(f" > Saved posterior parameter summaries to {out_csv}")
     print(f" > Saved tumor growth forecasts to {forecast_csv}")
     print(f" > Saved patient volume history to {vol_csv}")
+    print(f" > Saved run metadata & provenance log to {metadata_json_path}")
     print("=========================================================")
 
 
