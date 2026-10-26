@@ -1,6 +1,5 @@
 import vht_pipeline
 from pathlib import Path
-import re
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
@@ -9,98 +8,6 @@ from vht_helper_functions import *
 
 from lifelines import CoxPHFitter
 HAS_LIFELINES = True
-
-
-# =====================================================================
-# 3. UNIFIED UTILITIES
-# =====================================================================
-
-biological_priors = [
-    "IDH1 mutation",
-    "IDH2 mutation",
-    "MGMT methylation",
-    "1p/19q",
-    "ATRX mutation",
-    "BRAF V600E mutation",
-    "TERT promoter mutation",
-    "Chromosome 7 gain and Chromosome 10 loss",
-    "H3-3A mutation",
-    "EGFR amplification",
-    "PTEN mutation",
-    "CDKN2A/B deletion",
-    "TP53 alteration",
-    "Grade of Primary Brain Tumor",
-]
-
-treatment_columns = [
-    "Initial Chemo Therapy",
-    "Radiation Therapy",
-    "Dose",
-    "Number of Fractions",
-    "Additional Therapy",
-    "2nd_Additional Therapy",
-    "Immuno therapy",
-    "Brachy therapy",
-    "Cycle length of Additional Therapy (q days)",
-    "Number of Days from Diagnosis to Starting Additional Therapy",
-    "Number of Days from Diagnosis to Starting 2nd_Additional Therapy",
-    "Number of Days from Diagnosis to Start Immunotherapy",
-    "Number of days from Diagnosis to Initial Chemo Therapy Start date",
-    "Number of days from Diagnosis to Radiation Therapy Start date",
-]
-
-keys_to_check = [
-    (
-        "Chemo",
-        "Number of days from Diagnosis to Initial Chemo Therapy Start date",
-        "Number of days from Diagnosis to Initial Chemo Therapy end date",
-    ),
-    (
-        "Rad",
-        "Number of days from Diagnosis to Radiation Therapy Start date",
-        "Number of days from Diagnosis to Radiation Therapy end date",
-    ),
-    (
-        "Additional1",
-        "Number of Days from Diagnosis to Starting Additional Therapy",
-        "Number of Days from Diagnosis to Complete Additional Therapy",
-    ),
-    (
-        "Additional2",
-        "Number of Days from Diagnosis to Starting 2nd_Additional Therapy",
-        "Number of Days from Diagnosis to Complete 2nd_Additional Therapy",
-    ),
-    (
-        "Immuno",
-        "Number of Days from Diagnosis to Start Immunotherapy",
-        "Number of Days from Diagnosis to Complete Immunotherapy",
-    ),
-    (
-        "Brachy",
-        "Number of Days from Diagnosis to the day of Insertion of Brachytherapy",
-        "Number of Days from Diagnosis to the day of Insertion of Brachytherapy",
-    ),
-]
-
-intensity_weights = {
-    "Necrotic": {"T1C": 0.10, "T1N": 0.30, "T2F": 0.30, "T2W": 0.30},
-    "Edema": {"T1C": 0.10, "T1N": 0.15, "T2F": 0.40, "T2W": 0.35},
-    "Enhancing": {"T1C": 0.50, "T1N": 0.15, "T2F": 0.20, "T2W": 0.15},
-    "Resection": {"T1C": 0.35, "T1N": 0.25, "T2F": 0.20, "T2W": 0.20},
-}
-
-heterogeneity_weights = {
-    "Necrotic": {"T1C": 0.15, "T1N": 0.25, "T2F": 0.30, "T2W": 0.30},
-    "Edema": {"T1C": 0.10, "T1N": 0.15, "T2F": 0.40, "T2W": 0.35},
-    "Enhancing": {"T1C": 0.45, "T1N": 0.20, "T2F": 0.20, "T2W": 0.15},
-    "Resection": {"T1C": 0.30, "T1N": 0.25, "T2F": 0.20, "T2W": 0.25},
-}
-
-
-
-# =====================================================================
-# 5. FEATURE EXTRACTION & SURVIVAL DATASET BUILDER
-# =====================================================================
 
 def build_survival_dataset(patient_objects, df_volumes, df_kinetics):
     survival_rows = []
@@ -236,17 +143,33 @@ def run_cox_survival_analysis(df_survival):
     try:
         cph = CoxPHFitter(penalizer=0.1)
         cph.fit(cox_data, duration_col="Duration", event_col="Event")
-        print("\n--- Cox Model Summary ---")
-        cph.print_summary()
+        
+        # --- ENHANCED TABULAR STATISTICAL SUMMARY REPORTING ---
+        print("\n" + "="*85)
+        print("          COX PROPORTIONAL HAZARDS SURVIVAL ANALYSIS SUMMARY       ")
+        print("="*85)
+        
+        summary_df = cph.summary
+        formatted_summary = pd.DataFrame({
+            "Coef (beta)": summary_df["coef"].round(4),
+            "Exp(coef) [HR]": summary_df["exp(coef)"].round(4),
+            "Std Error": summary_df["se(coef)"].round(4),
+            "p-value": summary_df["p"].apply(lambda p: f"{p:.4e}" if p < 0.001 else f"{p:.4f}"),
+            "Lower 95%": summary_df["exp(coef) lower 95%"].round(4),
+            "Upper 95%": summary_df["exp(coef) upper 95%"].round(4),
+        })
+        
+        print(formatted_summary.to_string())
+        print("="*85)
+        print(f" Concordance Index (C-index): {cph.concordance_index_:.4f}")
+        print(f" Log-Likelihood Ratio Test p-value: {cph.log_likelihood_ratio_test().p_value:.4e}")
+        print("="*85 + "\n")
+        
         return cph
     except Exception as e:
         print(f"❌ Error fitting Cox Model: {e}")
         return None
 
-
-# =====================================================================
-# 6. MAIN
-# =====================================================================
 
 def main():
     patient_objects, df_kinetics, df_volumes, clinical_df = vht_pipeline.run_pipeline()
