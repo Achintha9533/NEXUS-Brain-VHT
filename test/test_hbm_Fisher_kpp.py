@@ -1,3 +1,10 @@
+"""
+Test Script for NEXUS Brain VHT Hierarchical Bayesian Model (HBM)
+=================================================================
+Verifies PyMC model graph construction, literature-grounded hyper-priors,
+non-centered patient-level parameters, and tensor shape dimensions.
+"""
+
 import sys
 import os
 import unittest
@@ -8,11 +15,11 @@ import pymc as pm
 # Add parent directory to path so it can find the model file
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Change 'hbm_Fisher_kpp' to the exact name of the file where your function lives
 from hbm_Fisher_kpp import build_hierarchical_fisher_kpp_model
 
 
 class TestHierarchicalFisherKPPModel(unittest.TestCase):
+    """Unit test suite for the Fisher-KPP Hierarchical Bayesian Model."""
 
     def setUp(self):
         """Create mock longitudinal cohort data frame for multi-patient testing."""
@@ -73,17 +80,20 @@ class TestHierarchicalFisherKPPModel(unittest.TestCase):
         model = build_hierarchical_fisher_kpp_model(self.cohort_df)
         num_patients = self.cohort_df["Patient_ID"].nunique()
 
-        rho_var = model.named_vars["rho"]
-        self.assertEqual(rho_var.eval().shape, (num_patients,))
+        with model:
+            rho_var = model.named_vars["rho"]
+            self.assertEqual(rho_var.eval().shape, (num_patients,))
 
-        alpha_rad_var = model.named_vars["alpha_rad"]
-        self.assertEqual(alpha_rad_var.eval().shape, (num_patients,))
+            alpha_rad_var = model.named_vars["alpha_rad"]
+            self.assertEqual(alpha_rad_var.eval().shape, (num_patients,))
 
     def test_prediction_tensor_shape(self):
         """Test that predicted volumes match the total number of rows in the cohort dataset."""
         model = build_hierarchical_fisher_kpp_model(self.cohort_df)
-        pred_vol_var = model.named_vars["pred_volumes"]
-        self.assertEqual(pred_vol_var.eval().shape, (len(self.cohort_df),))
+        
+        with model:
+            pred_vol_var = model.named_vars["pred_volumes"]
+            self.assertEqual(pred_vol_var.eval().shape, (len(self.cohort_df),))
 
 
 if __name__ == "__main__":
