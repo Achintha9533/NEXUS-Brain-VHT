@@ -2,11 +2,13 @@
 Interactive Cohort Visualization Layer for Hierarchical Bayesian Modeling (HBM)
 =============================================================================
 Compiles records globally, runs MCMC sampling via PyMC, extracts posterior metrics,
-and plots longitudinal patient trajectories with treatment window shading.
+plots longitudinal patient trajectories with treatment window shading, and 
+automatically exports MCMC convergence diagnostic figures for thesis inclusion.
 """
 
 from __future__ import annotations
 
+import os
 import matplotlib
 matplotlib.use('Agg')  # <--- Disables GUI pop-up blocks
 import matplotlib.pyplot as plt
@@ -27,8 +29,9 @@ def estimate_and_plot_each_patient(
     draw_steps: int = 1000
 ) -> pd.DataFrame:
     """
-    Unified HBM pipeline that compiles records globally and streams posterior metrics 
-    directly down into comparative timeline plots.
+    Unified HBM pipeline that compiles records globally, runs MCMC sampling,
+    exports diagnostic plots, and streams posterior metrics directly down 
+    into comparative timeline plots.
     """
     df = build_patient_volume_dataframe(patient_objects)
     
@@ -43,6 +46,36 @@ def estimate_and_plot_each_patient(
     with hbm_model:
         trace = pm.sample(draws=draw_steps, tune=tune_steps, target_accept=0.90, random_seed=42)
     
+    # --- AUTOMATED MCMC CONVERGENCE DIAGNOSTIC EXPORT & REPORTING ---
+    print("\n" + "="*75)
+    print("      MCMC CONVERGENCE DIAGNOSTICS (ARVIZ R-hat & ESS)      ")
+    print("="*75)
+    try:
+        diag_summary = az.summary(trace, var_names=["mu_log_rho", "mu_log_D", "mu_log_K", "sigma_obs_log_v"])
+        print(diag_summary[["mean", "sd", "r_hat", "ess_bulk", "ess_tail"]])
+        
+        divergences = trace.sample_stats.diverging.values.sum()
+        print(f"\nTotal Divergent Transitions: {divergences}")
+
+        # Automatically export diagnostic plots for the thesis manuscript
+        os.makedirs("figures", exist_ok=True)
+        
+        print("\n > Exporting MCMC convergence plots to 'figures/' directory...")
+        az.plot_trace(trace, var_names=["mu_log_rho", "mu_log_D", "mu_log_K"])
+        plt.suptitle("MCMC Trace Plots for Fisher-KPP Hyperpriors", y=1.02, fontsize=14)
+        plt.savefig("figures/mcmc_trace_plots.png", dpi=300, bbox_inches="tight")
+        plt.close()
+
+        az.plot_rank(trace, var_names=["mu_log_rho", "mu_log_D", "mu_log_K"])
+        plt.suptitle("MCMC Rank Plots for Fisher-KPP Hyperpriors", y=1.02, fontsize=14)
+        plt.savefig("figures/mcmc_rank_plots.png", dpi=300, bbox_inches="tight")
+        plt.close()
+        print(" > Successfully saved: figures/mcmc_trace_plots.png, figures/mcmc_rank_plots.png")
+
+    except Exception as e:
+        print(f"Diagnostic reporting / plotting note: {e}")
+    print("="*75 + "\n")
+
     # --- ENHANCED STATISTICAL SUMMARY REPORTING ---
     print("\n" + "="*75)
     print("      HIERARCHICAL BAYESIAN MODEL (HBM) POPULATION HYPER-PRIORS      ")
@@ -149,6 +182,6 @@ def estimate_and_plot_each_patient(
         ax.grid(True, alpha=0.3)
         ax.legend(loc="upper left")
         fig.tight_layout()
-        plt.show()
+        plt.close(fig)  # Prevent memory leakage from non-interactive patient loop plots
 
     return pd.DataFrame(results)

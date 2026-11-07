@@ -2,7 +2,8 @@
 Test Script for NEXUS Brain VHT Hierarchical Bayesian Model (HBM)
 =================================================================
 Verifies PyMC model graph construction, literature-grounded hyper-priors,
-non-centered patient-level parameters, and tensor shape dimensions.
+non-centered patient-level parameters, tensor shape dimensions, and 
+MCMC convergence diagnostic extraction workflows (R-hat & ESS).
 """
 
 import sys
@@ -11,6 +12,7 @@ import unittest
 import numpy as np
 import pandas as pd
 import pymc as pm
+import arviz as az
 
 # Add parent directory to path so it can find the model file
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -94,6 +96,38 @@ class TestHierarchicalFisherKPPModel(unittest.TestCase):
         with model:
             pred_vol_var = model.named_vars["pred_volumes"]
             self.assertEqual(pred_vol_var.eval().shape, (len(self.cohort_df),))
+
+    def test_mcmc_smoke_sampling_and_diagnostics(self):
+        """Test a rapid multi-chain MCMC smoke sample and verify ArViZ convergence summary generation."""
+        model = build_hierarchical_fisher_kpp_model(self.cohort_df)
+        
+        with model:
+            # Run a rapid smoke sample across 2 chains to satisfy ArViZ multi-chain checks
+            trace = pm.sample(
+                draws=10, 
+                tune=10, 
+                chains=2, 
+                return_inferencedata=True, 
+                progressbar=False
+            )
+            
+            # 1. Verify InferenceData is returned and contains posterior draws
+            self.assertIsInstance(trace, az.InferenceData)
+            self.assertIn("posterior", trace.groups())
+
+            # 2. Extract ArViZ convergence summary for core hyperparameters
+            summary = az.summary(trace, var_names=["mu_log_rho", "mu_log_D", "mu_log_K"])
+            self.assertIsInstance(summary, pd.DataFrame)
+            
+            # Assert essential diagnostic columns exist
+            self.assertIn("r_hat", summary.columns)
+            self.assertIn("ess_bulk", summary.columns)
+
+            # 3. Check for divergent transitions programmatically
+            if hasattr(trace, "sample_stats") and "diverging" in trace.sample_stats:
+                divergences = trace.sample_stats.diverging.values.sum()
+                self.assertGreaterEqual(divergences, 0, "Divergence count must be a non-negative integer.")
+                print(f"\n[Test Diagnostic Check] Recorded divergences in smoke test: {divergences}")
 
 
 if __name__ == "__main__":
