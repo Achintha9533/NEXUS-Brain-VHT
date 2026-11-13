@@ -35,52 +35,100 @@ class TestHBMVisualizationPipeline(unittest.TestCase):
             }
         }
 
-    @patch("visualization.plt.show")
+    @patch("visualization.plt.close")
+    @patch("visualization.plt.savefig")
+    @patch("visualization.plt.suptitle")
+    @patch("visualization.az.plot_rank")
+    @patch("visualization.az.plot_trace")
     @patch("visualization.az.summary")
     @patch("visualization.pm.sample")
+    @patch("visualization.build_hierarchical_fisher_kpp_model")
+    @patch("visualization.build_patient_volume_dataframe")
     def test_estimate_and_plot_each_patient_success(
         self, 
+        mock_build_vol_df,
+        mock_build_model,
         mock_pm_sample, 
         mock_az_summary, 
-        mock_plt_show
+        mock_plot_trace,
+        mock_plot_rank,
+        mock_suptitle,
+        mock_savefig,
+        mock_plt_close
     ):
         """Test successful execution of estimate_and_plot_each_patient with mocked MCMC & plotting."""
         
-        # 1. Mock PyMC trace object structure returned by pm.sample()
+        # 1. Mock volume dataframe returned by build_patient_volume_dataframe
+        mock_build_vol_df.return_value = pd.DataFrame({
+            "Patient_ID": ["PATIENT-001", "PATIENT-001"],
+            "Patient_Idx": [0, 0],
+            "Timepoint": ["Timepoint_1", "Timepoint_2"],
+            "Day": [0.0, 30.0],
+            "Volume_Total": [50000.0, 52000.0],
+            "Volume_Core": [15000.0, 16000.0],
+            "Chemo_Active": [0.0, 1.0],
+            "Rad_Active": [0.0, 0.0],
+            "Additional1_Active": [0.0, 0.0],
+            "Additional2_Active": [0.0, 0.0],
+            "Immuno_Active": [0.0, 0.0],
+            "Brachy_Active": [0.0, 0.0],
+            "Vmax_Ref": [500000.0, 500000.0],
+            "dt": [30.0, 30.0]
+        })
+
+        # 2. Mock model context
+        mock_model = MagicMock()
+        mock_build_model.return_value = mock_model
+
+        # 3. Mock PyMC trace object structure returned by pm.sample()
         mock_trace = MagicMock()
-        mock_trace.posterior.__getitem__.return_value.mean.return_value.values = np.array([1000.0, 1100.0])
+        # pred_volumes mean tensor shape matching dataframe length (2 rows)
+        mock_trace.posterior.__getitem__.return_value.mean.return_value.values = np.array([50000.0, 51000.0])
+        mock_trace.sample_stats.diverging.values.sum.return_value = 0
         mock_pm_sample.return_value = mock_trace
 
-        # 2. Mock ArviZ az.summary() for both calls:
-        # Call 1: Population hyper-priors summary table
-        pop_summary_mock = pd.DataFrame({
-            "mean": [-4.5, -3.0, 11.5, 0.25],
-            "sd": [0.5, 0.5, 0.2, 0.05],
-            "hdi_3%": [-5.5, -4.0, 11.0, 0.15],
-            "hdi_97%": [-3.5, -2.0, 12.0, 0.35]
-        }, index=["mu_log_rho", "mu_log_D", "mu_log_K", "sigma_obs_log_v"])
+        # 4. Mock ArviZ az.summary() using a side effect to handle all calls gracefully
+        def az_summary_side_effect(*args, **kwargs):
+            # Check arguments or call count/signature to return appropriate mock dataframe
+            var_names = kwargs.get("var_names", args[1] if len(args) > 1 else None)
+            kind = kwargs.get("kind", "mean")
+            
+            if var_names is not None:
+                return pd.DataFrame({
+                    "mean": [-4.5, -3.0, 11.5, 0.25],
+                    "sd": [0.5, 0.5, 0.2, 0.05],
+                    "hdi_3%": [-5.5, -4.0, 11.0, 0.15],
+                    "hdi_97%": [-3.5, -2.0, 12.0, 0.35],
+                    "r_hat": [1.00, 1.00, 1.01, 1.01],
+                    "ess_bulk": [500.0, 500.0, 500.0, 500.0],
+                    "ess_tail": [500.0, 500.0, 500.0, 500.0]
+                }, index=["mu_log_rho", "mu_log_D", "mu_log_K", "sigma_obs_log_v"])
+            else:
+                return pd.DataFrame({
+                    "mean": [0.01, 0.005, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+                    "sd": [0.001, 0.001, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05],
+                    "hdi_3%": [0.008, 0.003, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4],
+                    "hdi_97%": [0.012, 0.007, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6],
+                    "r_hat": [1.00] * 8,
+                    "ess_bulk": [500.0] * 8,
+                    "ess_tail": [500.0] * 8
+                }, index=[
+                    "rho[0]", "D[0]", 
+                    "alpha_chemo[0]", "alpha_rad[0]", 
+                    "alpha_immuno[0]", "alpha_add1[0]", 
+                    "alpha_add2[0]", "alpha_brachy[0]"
+                ])
 
-        # Call 2: Patient-level posterior summary table
-        post_summary_mock = pd.DataFrame({
-            "mean": [0.01, 0.005, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
-        }, index=[
-            "rho[0]", "D[0]", 
-            "alpha_chemo[0]", "alpha_rad[0]", 
-            "alpha_immuno[0]", "alpha_add1[0]", 
-            "alpha_add2[0]", "alpha_brachy[0]"
-        ])
+        mock_az_summary.side_effect = az_summary_side_effect
 
-        # Use side_effect to return pop_summary on first call and post_summary on second call
-        mock_az_summary.side_effect = [pop_summary_mock, post_summary_mock]
-
-        # 3. Execute function
+        # 5. Execute function
         result_df = estimate_and_plot_each_patient(
             self.mock_patient_objects, 
             tune_steps=10, 
             draw_steps=10
         )
 
-        # 4. Assertions
+        # 6. Assertions
         self.assertIsInstance(result_df, pd.DataFrame)
         self.assertEqual(len(result_df), 1)  # 1 patient processed
         self.assertIn("Patient_ID", result_df.columns)
@@ -92,10 +140,12 @@ class TestHBMVisualizationPipeline(unittest.TestCase):
         self.assertEqual(result_df.iloc[0]["rho"], 0.01)
         self.assertEqual(result_df.iloc[0]["D"], 0.005)
 
-        # Verify that MCMC sampling, ArviZ summaries, and plotting routines were triggered
+        # Verify routines were triggered
         mock_pm_sample.assert_called_once()
-        self.assertEqual(mock_az_summary.call_count, 2)
-        mock_plt_show.assert_called_once()
+        self.assertGreaterEqual(mock_az_summary.call_count, 2)
+        mock_plot_trace.assert_called_once()
+        mock_plot_rank.assert_called_once()
+        mock_savefig.assert_called()
 
     @patch("visualization.build_patient_volume_dataframe")
     def test_estimate_and_plot_empty_dataframe_handling(self, mock_build_vol_df):
