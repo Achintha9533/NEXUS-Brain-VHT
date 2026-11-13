@@ -67,8 +67,9 @@ def build_hierarchical_fisher_kpp_model(cohort_df: pd.DataFrame) -> pm.Model:
         sigma_obs_log_v = pm.HalfNormal("sigma_obs_log_v", sigma=0.25)
 
         # =====================================================================
-        # 2. PATIENT-LEVEL PARAMETERS (Non-Centered Parameterization)
+        # 2. PATIENT-LEVEL PARAMETERS (Fully Non-Centered Parameterization)
         # =====================================================================
+        # Growth and carrying capacity offsets (already non-centered)
         rho_off = pm.Normal("rho_offset", shape=num_patients)
         D_off   = pm.Normal("D_offset",   shape=num_patients)
         K_off   = pm.Normal("K_offset",   shape=num_patients)
@@ -77,12 +78,20 @@ def build_hierarchical_fisher_kpp_model(cohort_df: pd.DataFrame) -> pm.Model:
         D   = pm.Deterministic("D",   pt.exp(mu_log_D   + D_off   * sigma_log_D))   # mm^2/day
         K   = pm.Deterministic("K",   pt.exp(mu_log_K   + K_off   * sigma_log_K))   # mm^3
 
-        alpha_chemo  = pm.HalfNormal("alpha_chemo",  sigma=mu_alpha_chemo,  shape=num_patients)
-        alpha_rad    = pm.HalfNormal("alpha_rad",    sigma=mu_alpha_rad,    shape=num_patients)
-        alpha_immuno = pm.HalfNormal("alpha_immuno", sigma=mu_alpha_immuno, shape=num_patients)
-        alpha_add1   = pm.HalfNormal("alpha_add1",   sigma=mu_alpha_add1,   shape=num_patients)
-        alpha_add2   = pm.HalfNormal("alpha_add2",   sigma=mu_alpha_add2,   shape=num_patients)
-        alpha_brachy = pm.HalfNormal("alpha_brachy", sigma=mu_alpha_brachy, shape=num_patients)
+        # Treatment inhibition offsets (UPDATED TO NON-CENTERED HALFNORMAL)
+        alpha_chemo_off  = pm.HalfNormal("alpha_chemo_off",  sigma=1.0, shape=num_patients)
+        alpha_rad_off    = pm.HalfNormal("alpha_rad_off",    sigma=1.0, shape=num_patients)
+        alpha_immuno_off = pm.HalfNormal("alpha_immuno_off", sigma=1.0, shape=num_patients)
+        alpha_add1_off   = pm.HalfNormal("alpha_add1_off",   sigma=1.0, shape=num_patients)
+        alpha_add2_off   = pm.HalfNormal("alpha_add2_off",   sigma=1.0, shape=num_patients)
+        alpha_brachy_off = pm.HalfNormal("alpha_brachy_off", sigma=1.0, shape=num_patients)
+
+        alpha_chemo  = pm.Deterministic("alpha_chemo",  alpha_chemo_off  * mu_alpha_chemo)
+        alpha_rad    = pm.Deterministic("alpha_rad",    alpha_rad_off    * mu_alpha_rad)
+        alpha_immuno = pm.Deterministic("alpha_immuno", alpha_immuno_off * mu_alpha_immuno)
+        alpha_add1   = pm.Deterministic("alpha_add1",   alpha_add1_off   * mu_alpha_add1)
+        alpha_add2   = pm.Deterministic("alpha_add2",   alpha_add2_off   * mu_alpha_add2)
+        alpha_brachy = pm.Deterministic("alpha_brachy", alpha_brachy_off * mu_alpha_brachy)
 
         # Map patient parameters to longitudinal timepoint rows
         row_rho      = rho[p_idx_arr]
