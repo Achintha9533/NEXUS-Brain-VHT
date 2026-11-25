@@ -4,6 +4,12 @@ Hierarchical Bayesian Modeling (HBM) for Glioblastoma Growth Parameter Estimatio
 Implements a Hierarchical Bayesian model using PyMC and PyTensor based on the 
 Fisher-KPP Reaction-Diffusion equation:
     dc/dt = D * grad^2(c) + rho * c * (1 - c/K) - Kill(t)*c
+
+Parameterizes log(rho) and log(D) via their log-product (wave-speed scale) and
+log-ratio (relative split) to improve MCMC geometry, and supports an optional
+second compartment observable (e.g., `Volume_Invasive`) in `cohort_df` with a
+diffusion-weighted invasive front likelihood to break volume-only collinearity
+between D and rho when invasive/spatial data is available.
 """
 
 from __future__ import annotations
@@ -35,6 +41,13 @@ def build_hierarchical_fisher_kpp_model(cohort_df: pd.DataFrame) -> pm.Model:
     is_base_arr = df_local["Is_Baseline"].values.astype(np.float64)
     obs_vol_arr = df_local["Volume_Total"].values.astype(np.float64)
 
+    has_invasive_obs = "Volume_Invasive" in df_local.columns
+    obs_inv_arr = (
+        df_local["Volume_Invasive"].values.astype(np.float64)
+        if has_invasive_obs
+        else obs_vol_arr
+    )
+
     # Active treatment exposure arrays (0.0 to 1.0 fraction of time active)
     chemo_act  = df_local.get("Chemo_ActiveFraction", df_local.get("Chemo_Active", 0.0)).values.astype(np.float64)
     rad_act    = df_local.get("Rad_ActiveFraction", df_local.get("Rad_Active", 0.0)).values.astype(np.float64)
@@ -45,12 +58,19 @@ def build_hierarchical_fisher_kpp_model(cohort_df: pd.DataFrame) -> pm.Model:
 
     with pm.Model() as model:
         # =====================================================================
-        # 1. POPULATION HYPER-PRIORS (Literature-Grounded)
+        # 1. POPULATION HYPER-PRIORS (Product + Ratio Parameterization)
         # =====================================================================
-        mu_log_rho = pm.Normal("mu_log_rho", mu=-4.5, sigma=1.5)
-        mu_log_D   = pm.Normal("mu_log_D",   mu=-3.0, sigma=1.5)
-        sigma_log_rho = pm.HalfNormal("sigma_log_rho", sigma=1.0)
-        sigma_log_D   = pm.HalfNormal("sigma_log_D",   sigma=1.0)
+        # Log-product log(rho * D) governs wave speed; log-ratio log(rho / D)
+        # captures relative growth-to-diffusion split.
+        mu_log_prod  = pm.Normal("mu_log_prod",  mu=-7.5, sigma=2.0)
+        mu_log_ratio = pm.Normal("mu_log_ratio", mu=-1.5, sigma=2.0)
+
+        sigma_log_prod  = pm.HalfNormal("sigma_log_prod",  sigma=1.0)
+        sigma_log_ratio = pm.HalfNormal("sigma_log_ratio", sigma=1.0)
+
+        # Population log-scale deterministics for rho and D
+        mu_log_rho = pm.Deterministic("mu_log_rho", 0.5 * (mu_log_prod + mu_log_ratio))
+        mu_log_D   = pm.Deterministic("mu_log_D",   0.5 * (mu_log_prod - mu_log_ratio))
 
         # Carrying capacity hyper-priors
         mu_log_K    = pm.Normal("mu_log_K", mu=11.5, sigma=1.0)
@@ -65,20 +85,24 @@ def build_hierarchical_fisher_kpp_model(cohort_df: pd.DataFrame) -> pm.Model:
         mu_alpha_brachy = pm.HalfNormal("mu_alpha_brachy", sigma=1.0)
 
         sigma_obs_log_v = pm.HalfNormal("sigma_obs_log_v", sigma=0.25)
+        if has_invasive_obs:
+            sigma_obs_log_inv = pm.HalfNormal("sigma_obs_log_inv", sigma=0.25)
 
         # =====================================================================
         # 2. PATIENT-LEVEL PARAMETERS (Fully Non-Centered Parameterization)
         # =====================================================================
-        # Growth and carrying capacity offsets (already non-centered)
-        rho_off = pm.Normal("rho_offset", shape=num_patients)
-        D_off   = pm.Normal("D_offset",   shape=num_patients)
-        K_off   = pm.Normal("K_offset",   shape=num_patients)
+        prod_off  = pm.Normal("prod_offset",  shape=num_patients)
+        ratio_off = pm.Normal("ratio_offset", shape=num_patients)
+        K_off     = pm.Normal("K_offset",     shape=num_patients)
 
-        rho = pm.Deterministic("rho", pt.exp(mu_log_rho + rho_off * sigma_log_rho)) # 1/day
-        D   = pm.Deterministic("D",   pt.exp(mu_log_D   + D_off   * sigma_log_D))   # mm^2/day
-        K   = pm.Deterministic("K",   pt.exp(mu_log_K   + K_off   * sigma_log_K))   # mm^3
+        log_prod_p  = mu_log_prod  + prod_off  * sigma_log_prod
+        log_ratio_p = mu_log_ratio + ratio_off * sigma_log_ratio
 
-        # Treatment inhibition offsets (UPDATED TO NON-CENTERED HALFNORMAL)
+        rho = pm.Deterministic("rho", pt.exp(0.5 * (log_prod_p + log_ratio_p)))  # 1/day
+        D   = pm.Deterministic("D",   pt.exp(0.5 * (log_prod_p - log_ratio_p)))  # mm^2/day
+        K   = pm.Deterministic("K",   pt.exp(mu_log_K + K_off * sigma_log_K))    # mm^3
+
+        # Treatment inhibition offsets (Non-centered HalfNormal)
         alpha_chemo_off  = pm.HalfNormal("alpha_chemo_off",  sigma=1.0, shape=num_patients)
         alpha_rad_off    = pm.HalfNormal("alpha_rad_off",    sigma=1.0, shape=num_patients)
         alpha_immuno_off = pm.HalfNormal("alpha_immuno_off", sigma=1.0, shape=num_patients)
@@ -108,14 +132,17 @@ def build_hierarchical_fisher_kpp_model(cohort_df: pd.DataFrame) -> pm.Model:
         # 3. FISHER-KPP STEP KINETICS
         # =====================================================================
         def fisher_kpp_step(
-            dt, is_baseline, obs_vol, rho_p, d_p, k_p,
+            dt, is_baseline, obs_vol, obs_inv, rho_p, d_p, k_p,
             ch_a, rd_a, im_a, ad1_a, ad2_a, br_a,
             a_ch, a_rd, a_im, a_ad1, a_ad2, a_br,
-            prev_r
+            prev_r, prev_r_inv
         ):
             # Baseline radius initialization (assuming spherical expansion: r = (3V / 4pi)^(1/3))
             r_base = (3.0 * obs_vol / (4.0 * np.pi)) ** (1.0 / 3.0)
             r_curr = pt.switch(pt.eq(is_baseline, 1.0), r_base, prev_r)
+
+            r_inv_base = (3.0 * obs_inv / (4.0 * np.pi)) ** (1.0 / 3.0)
+            r_inv_curr = pt.switch(pt.eq(is_baseline, 1.0), r_inv_base, prev_r_inv)
 
             # Equivalent current volume
             v_curr = (4.0 / 3.0) * np.pi * (r_curr ** 3.0)
@@ -138,15 +165,20 @@ def build_hierarchical_fisher_kpp_model(cohort_df: pd.DataFrame) -> pm.Model:
             # Radial advance over step interval dt
             r_next = r_curr + (dt * v_fisher)
 
-            return r_next
+            # Diffusion-weighted invasive halo expansion (scales with sqrt(D * damping))
+            v_invasive = pt.sqrt(pt.maximum(d_p * treatment_damping, 1e-8))
+            r_inv_next = r_inv_curr + (dt * v_invasive)
+
+            return r_next, r_inv_next
 
         # Scan across longitudinal timepoints
-        predicted_radii, _ = pytensor.scan(
+        (predicted_radii, predicted_inv_radii), _ = pytensor.scan(
             fn=fisher_kpp_step,
             sequences=[
                 pt.as_tensor_variable(dt_arr, dtype="float64"),
                 pt.as_tensor_variable(is_base_arr, dtype="float64"),
                 pt.as_tensor_variable(obs_vol_arr, dtype="float64"),
+                pt.as_tensor_variable(obs_inv_arr, dtype="float64"),
                 row_rho,
                 row_D,
                 row_K,
@@ -163,7 +195,10 @@ def build_hierarchical_fisher_kpp_model(cohort_df: pd.DataFrame) -> pm.Model:
                 row_a_add2,
                 row_a_brachy,
             ],
-            outputs_info=[pt.as_tensor_variable(0.0, dtype="float64")]
+            outputs_info=[
+                pt.as_tensor_variable(0.0, dtype="float64"),
+                pt.as_tensor_variable(0.0, dtype="float64"),
+            ]
         )
 
         pred_volumes = pm.Deterministic(
@@ -171,12 +206,24 @@ def build_hierarchical_fisher_kpp_model(cohort_df: pd.DataFrame) -> pm.Model:
             (4.0 / 3.0) * np.pi * (predicted_radii ** 3.0)
         )
 
-        # Likelihood over log-transformed volume measurements
+        # Likelihood over log-transformed total volume measurements
         pm.Normal(
             "likelihood",
             mu=pt.log(pt.maximum(pred_volumes, 1.0)),
             sigma=sigma_obs_log_v,
             observed=np.log(np.maximum(obs_vol_arr, 1.0))
         )
+
+        if has_invasive_obs:
+            pred_inv_volumes = pm.Deterministic(
+                "pred_invasive_volumes",
+                (4.0 / 3.0) * np.pi * (predicted_inv_radii ** 3.0)
+            )
+            pm.Normal(
+                "invasive_likelihood",
+                mu=pt.log(pt.maximum(pred_inv_volumes, 1.0)),
+                sigma=sigma_obs_log_inv,
+                observed=np.log(np.maximum(obs_inv_arr, 1.0))
+            )
 
     return model
