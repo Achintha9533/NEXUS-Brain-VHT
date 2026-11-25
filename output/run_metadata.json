@@ -1,5 +1,5 @@
 {
-    "execution_timestamp": "2026-11-06T23:22:16.140745",
+    "execution_timestamp": "2026-11-13T00:52:31.543728",
     "cohort_size_patients": 155,
     "library_versions": {
         "pymc": "5.12.0",
@@ -10,8 +10,8 @@
     },
     "mcmc_hyperparameters": {
         "draws": 1000,
-        "tune": 1000,
-        "target_accept": 0.9,
+        "tune": 2000,
+        "target_accept": 0.99,
         "random_seed": 42
     },
     "convergence_verification": {
