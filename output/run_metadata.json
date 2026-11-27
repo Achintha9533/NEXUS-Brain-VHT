@@ -1,6 +1,10 @@
 {
-    "execution_timestamp": "2026-11-13T00:52:31.543728",
+    "execution_timestamp": "2026-11-25T21:22:59.696495",
     "cohort_size_patients": 155,
+    "observables": {
+        "volume_total_present": true,
+        "volume_invasive_present": false
+    },
     "library_versions": {
         "pymc": "5.12.0",
         "numpy": "1.26.4",
@@ -11,12 +15,16 @@
     "mcmc_hyperparameters": {
         "draws": 1000,
         "tune": 2000,
-        "target_accept": 0.99,
-        "random_seed": 42
+        "target_accept_configured_in_main": 0.99,
+        "random_seed_configured_in_main": 42,
+        "forecast_days": 180
     },
     "convergence_verification": {
-        "status": "Verified",
+        "status": "unverified_no_trace_exposed",
         "r_hat_threshold": "<= 1.01",
-        "divergent_transitions": 0
+        "max_r_hat": null,
+        "min_ess_bulk": null,
+        "min_ess_tail": null,
+        "divergent_transitions": null
     }
 }
