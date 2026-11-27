@@ -102,8 +102,8 @@ def main():
     print("=========================================================")
 
     # Define hyperparameters for reproducibility tracking
-    MCMC_DRAWS = 1000
-    MCMC_TUNE = 2000
+    MCMC_DRAWS = 1500
+    MCMC_TUNE = 2500
     TARGET_ACCEPT = 0.99
     RANDOM_SEED = 42
     FORECAST_DAYS = 180
